@@ -142,6 +142,17 @@ func (module *DIMEX_Module) handleUponReqEntry() {
 		       		manda msg [ pl , Send | q, [ reqEntry, id, reqTs ]
 		   		st := wantMX
 	*/
+	module.lcl++                     // Incrementa o relógio lógico local
+	module.reqTs = module.lcl        // Define o timestamp da requisição
+	module.nbrResps = 0              // Reseta o contador de respostas
+	module.st = wantMX               // Atualiza o estado para 'querer MX'
+
+	for i, addr := range module.processes {
+		if i != module.id { // Evita enviar para si mesmo
+			msg := fmt.Sprintf("reqEntry %d %d", module.id, module.reqTs)
+			module.sendToLink(addr, msg, "    ") // Envia a solicitação para todos os outros processos
+		}
+	}
 }
 
 func (module *DIMEX_Module) handleUponReqExit() {
@@ -152,6 +163,14 @@ func (module *DIMEX_Module) handleUponReqExit() {
 		   			waiting := {}
 					st := noMX
 	*/
+	for i, addr := range module.processes {
+		if module.waiting[i] { // Apenas responde aos processos que estão esperando
+			msg := "respOK"
+			module.sendToLink(addr, msg, "    ") // Envia a permissão de acesso
+			module.waiting[i] = false           // Remove o processo da lista de espera
+		}
+	}
+	module.st = noMX // Atualiza o estado para 'fora da MX'
 }
 
 // ------------------------------------------------------------------------------------
@@ -168,6 +187,12 @@ func (module *DIMEX_Module) handleUponDeliverRespOk(msgOutro PP2PLink.PP2PLink_I
 		    		then gera evento [ dmx, Deliver | resp ]
 		             	 st := inMX
 	*/
+	module.nbrResps++ // Incrementa o número de respostas recebidas
+
+	if module.nbrResps == len(module.processes)-1 { // Verifica se recebeu respostas de todos
+		module.Ind <- dmxResp{} // Notifica que pode entrar na seção crítica
+		module.st = inMX        // Atualiza o estado para 'dentro da MX'
+	}
 }
 
 func (module *DIMEX_Module) handleUponDeliverReqEntry(msgOutro PP2PLink.PP2PLink_Ind_Message) {
@@ -182,6 +207,19 @@ func (module *DIMEX_Module) handleUponDeliverReqEntry(msgOutro PP2PLink.PP2PLink
 		        		// then   waiting := waiting + [ q ]     else  // empty
 		     	   lcl := max(lcl, rts)
 	*/
+	var rid, rts int
+	fmt.Sscanf(msgOutro.Message, "reqEntry %d %d", &rid, &rts) // Extrai os valores do ID e timestamp
+
+	// Atualiza o relógio lógico local
+	module.lcl = max(module.lcl, rts) + 1
+
+	// Decide se deve enviar a resposta ou adicionar o processo na lista de espera
+	if module.st == noMX || (module.st == wantMX && before(module.id, module.reqTs, rid, rts)) {
+		respMsg := "respOK"
+		module.sendToLink(module.processes[rid], respMsg, "    ") // Envia a resposta
+	} else {
+		module.waiting[rid] = true // Adiciona o processo na lista de espera
+	}
 }
 
 // ------------------------------------------------------------------------------------
@@ -209,4 +247,11 @@ func (module *DIMEX_Module) outDbg(s string) {
 	if module.dbg {
 		fmt.Println(". . . . . . . . . . . . [ DIMEX : " + s + " ]")
 	}
+}
+//funcao p/ obter o máximo entre 2 inteiros
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
